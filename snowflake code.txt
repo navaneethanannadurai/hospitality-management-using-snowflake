@@ -1,0 +1,481 @@
+-- =============================================================
+--  HOSPITALITY ETL — SNOWFLAKE WORKSHEET (PURE SQL)
+--  Run each STEP separately (select each STEP individually and run)
+-- =============================================================
+
+
+-- ─────────────────────────────────────────────────────────────
+-- STEP 1: DATABASE & SCHEMA SETUP
+-- ─────────────────────────────────────────────────────────────
+CREATE DATABASE IF NOT EXISTS HOSPITALITY_DB;
+USE DATABASE HOSPITALITY_DB;
+CREATE SCHEMA IF NOT EXISTS PUBLIC;
+USE SCHEMA PUBLIC;
+
+
+-- ─────────────────────────────────────────────────────────────
+-- STEP 2: CREATE STAGING TABLES
+-- ─────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS STG_GUEST_MASTER (
+    GuestID          NUMBER,
+    FirstName        VARCHAR(100),
+    LastName         VARCHAR(100),
+    Gender           VARCHAR(10),
+    DateOfBirth      DATE,
+    Email            VARCHAR(200),
+    PhoneNumber      VARCHAR(20),
+    AddressLine1     VARCHAR(200),
+    AddressLine2     VARCHAR(200),
+    City             VARCHAR(100),
+    State            VARCHAR(100),
+    Country          VARCHAR(100),
+    IDProofType      VARCHAR(50),
+    IDProofNumber    VARCHAR(50),
+    RegistrationDate DATE,
+    LOAD_TIMESTAMP   TIMESTAMP DEFAULT CURRENT_TIMESTAMP()
+);
+
+CREATE TABLE IF NOT EXISTS STG_ROOM_MASTER (
+    RoomID          NUMBER,
+    RoomType        VARCHAR(50),
+    FloorNumber     NUMBER,
+    BedType         VARCHAR(50),
+    BaseRate        NUMBER(10,2),
+    RoomStatus      VARCHAR(20),
+    MaxOccupancy    NUMBER,
+    Amenities       VARCHAR(500),
+    LastCleanedDate DATE,
+    LOAD_TIMESTAMP  TIMESTAMP DEFAULT CURRENT_TIMESTAMP()
+);
+
+CREATE TABLE IF NOT EXISTS STG_CHECKIN_CHECKOUT (
+    StayID           NUMBER,
+    GuestID          NUMBER,
+    RoomID           NUMBER,
+    CheckinDateTime  TIMESTAMP,
+    CheckoutDateTime TIMESTAMP,
+    BookingSource    VARCHAR(50),
+    NumberOfGuests   NUMBER,
+    RoomRate         NUMBER(10,2),
+    ExtraCharges     NUMBER(10,2),
+    DiscountAmount   NUMBER(10,2),
+    TotalAmount      NUMBER(10,2),
+    PaymentMode      VARCHAR(50),
+    Status           VARCHAR(20),
+    LastUpdated      DATE,
+    LOAD_TIMESTAMP   TIMESTAMP DEFAULT CURRENT_TIMESTAMP()
+);
+
+
+-- ─────────────────────────────────────────────────────────────
+-- STEP 3: CREATE FINAL TABLE — GUEST_STAY
+-- ─────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS GUEST_STAY (
+    StayID              NUMBER PRIMARY KEY,
+    GuestID             NUMBER,
+    GuestFullName       VARCHAR(200),
+    Gender              VARCHAR(10),
+    Email               VARCHAR(200),
+    City                VARCHAR(100),
+    Country             VARCHAR(100),
+    RoomID              NUMBER,
+    RoomType            VARCHAR(50),
+    BedType             VARCHAR(50),
+    FloorNumber         NUMBER,
+    Amenities           VARCHAR(500),
+    CheckinDateTime     TIMESTAMP,
+    CheckoutDateTime    TIMESTAMP,
+    StayDurationHours   NUMBER(10,2),
+    StayDurationDays    NUMBER(10,2),
+    BookingSource       VARCHAR(50),
+    NumberOfGuests      NUMBER,
+    RoomRate            NUMBER(10,2),
+    ExtraCharges        NUMBER(10,2),
+    DiscountAmount      NUMBER(10,2),
+    TotalAmount         NUMBER(10,2),
+    PaymentMode         VARCHAR(50),
+    Status              VARCHAR(20),
+    LastUpdated         DATE,
+    ETL_LOAD_TIMESTAMP  TIMESTAMP DEFAULT CURRENT_TIMESTAMP()
+);
+
+
+-- ─────────────────────────────────────────────────────────────
+-- STEP 4: CREATE AUDIT TABLE
+-- ─────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS GUEST_STAY_AUDIT (
+    AuditID         NUMBER AUTOINCREMENT PRIMARY KEY,
+    StayID          NUMBER,
+    OperationType   VARCHAR(10),
+    ChangedAt       TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),
+    ChangedBy       VARCHAR(100) DEFAULT CURRENT_USER(),
+    OldStatus       VARCHAR(20),
+    NewStatus       VARCHAR(20),
+    OldTotalAmount  NUMBER(10,2),
+    NewTotalAmount  NUMBER(10,2)
+);
+
+
+-- ─────────────────────────────────────────────────────────────
+-- STEP 5: CSV FILE UPLOAD — INTERNAL STAGE
+--
+--  Snowflake UI Steps:
+--  1. Data -> Databases -> HOSPITALITY_DB -> PUBLIC -> Stages
+--  2. "Create Stage" -> Internal Stage -> Name: HOSP_STAGE
+--  3. Or run the SQL below
+-- ─────────────────────────────────────────────────────────────
+
+CREATE STAGE IF NOT EXISTS HOSP_STAGE;
+
+-- CSV Format
+CREATE OR REPLACE FILE FORMAT HOSP_CSV_FORMAT
+    TYPE = 'CSV'
+    FIELD_OPTIONALLY_ENCLOSED_BY = '"'
+    SKIP_HEADER = 1
+    NULL_IF = ('NULL', 'null', '')
+    EMPTY_FIELD_AS_NULL = TRUE
+    DATE_FORMAT = 'AUTO'
+    TIMESTAMP_FORMAT = 'AUTO';
+
+-- NOTE: To upload CSV files use Snowflake UI -> Data -> Load Data
+-- Or via SnowSQL CLI:
+--   PUT file://C:/Users/dhara/Downloads/hospitality/Guest_Master_Hospitality.csv     @HOSP_STAGE;
+--   PUT file://C:/Users/dhara/Downloads/hospitality/Room_Master_Hospitality.csv      @HOSP_STAGE;
+--   PUT file://C:/Users/dhara/Downloads/hospitality/Checkin_Checkout_Hospitality.csv @HOSP_STAGE;
+
+
+-- ─────────────────────────────────────────────────────────────
+-- STEP 6: LOAD STAGING TABLES FROM STAGE
+-- ─────────────────────────────────────────────────────────────
+
+TRUNCATE TABLE STG_GUEST_MASTER;
+COPY INTO STG_GUEST_MASTER (
+    GuestID, FirstName, LastName, Gender, DateOfBirth, Email, PhoneNumber,
+    AddressLine1, AddressLine2, City, State, Country,
+    IDProofType, IDProofNumber, RegistrationDate
+)
+FROM @HOSP_STAGE/Guest_Master_Hospitality.csv
+FILE_FORMAT = (FORMAT_NAME = 'HOSP_CSV_FORMAT');
+
+TRUNCATE TABLE STG_ROOM_MASTER;
+COPY INTO STG_ROOM_MASTER (
+    RoomID, RoomType, FloorNumber, BedType, BaseRate,
+    RoomStatus, MaxOccupancy, Amenities, LastCleanedDate
+)
+FROM @HOSP_STAGE/Room_Master_Hospitality.csv
+FILE_FORMAT = (FORMAT_NAME = 'HOSP_CSV_FORMAT');
+
+TRUNCATE TABLE STG_CHECKIN_CHECKOUT;
+COPY INTO STG_CHECKIN_CHECKOUT (
+    StayID, GuestID, RoomID, CheckinDateTime, CheckoutDateTime,
+    BookingSource, NumberOfGuests, RoomRate, ExtraCharges,
+    DiscountAmount, TotalAmount, PaymentMode, Status, LastUpdated
+)
+FROM @HOSP_STAGE/Checkin_Checkout_Hospitality.csv
+FILE_FORMAT = (FORMAT_NAME = 'HOSP_CSV_FORMAT');
+
+-- Verify that the load was successful
+SELECT 'STG_GUEST_MASTER'     AS TABLE_NAME, COUNT(*) AS ROW_COUNT FROM STG_GUEST_MASTER    UNION ALL
+SELECT 'STG_ROOM_MASTER'      AS TABLE_NAME, COUNT(*) AS ROW_COUNT FROM STG_ROOM_MASTER     UNION ALL
+SELECT 'STG_CHECKIN_CHECKOUT' AS TABLE_NAME, COUNT(*) AS ROW_COUNT FROM STG_CHECKIN_CHECKOUT;
+
+
+-- ─────────────────────────────────────────────────────────────
+-- STEP 7: DATA VALIDATION CHECKS
+-- ─────────────────────────────────────────────────────────────
+
+-- 7a. GuestID mismatch check
+SELECT 'MISSING GUEST IDs' AS CHECK_NAME, COUNT(*) AS ISSUE_COUNT
+FROM STG_CHECKIN_CHECKOUT c
+WHERE NOT EXISTS (SELECT 1 FROM STG_GUEST_MASTER g WHERE g.GuestID = c.GuestID);
+
+-- 7b. RoomID mismatch check
+SELECT 'MISSING ROOM IDs' AS CHECK_NAME, COUNT(*) AS ISSUE_COUNT
+FROM STG_CHECKIN_CHECKOUT c
+WHERE NOT EXISTS (SELECT 1 FROM STG_ROOM_MASTER r WHERE r.RoomID = c.RoomID);
+
+-- 7c. NULL CheckinDateTime check
+SELECT 'NULL CHECKIN DATES' AS CHECK_NAME, COUNT(*) AS ISSUE_COUNT
+FROM STG_CHECKIN_CHECKOUT
+WHERE CheckinDateTime IS NULL;
+
+-- 7d. Checkout < Checkin check
+SELECT 'BAD DATE SEQUENCE' AS CHECK_NAME, COUNT(*) AS ISSUE_COUNT
+FROM STG_CHECKIN_CHECKOUT
+WHERE CheckoutDateTime < CheckinDateTime;
+
+-- 7e. Negative TotalAmount check
+SELECT 'NEGATIVE TOTAL AMOUNT' AS CHECK_NAME, COUNT(*) AS ISSUE_COUNT
+FROM STG_CHECKIN_CHECKOUT
+WHERE TotalAmount < 0;
+
+-- 7f. Active stays (CheckedIn, no checkout yet)
+SELECT 'ACTIVE STAYS (NO CHECKOUT)' AS CHECK_NAME, COUNT(*) AS ISSUE_COUNT
+FROM STG_CHECKIN_CHECKOUT
+WHERE CheckoutDateTime IS NULL;
+
+
+-- ─────────────────────────────────────────────────────────────
+-- STEP 8: TRANSFORM & LOAD -> GUEST_STAY  (MERGE / UPSERT)
+-- ─────────────────────────────────────────────────────────────
+
+MERGE INTO GUEST_STAY AS tgt
+USING (
+    SELECT
+        c.StayID,
+        c.GuestID,
+        TRIM(g.FirstName) || ' ' || TRIM(g.LastName)  AS GuestFullName,
+        g.Gender,
+        g.Email,
+        g.City,
+        g.Country,
+        c.RoomID,
+        r.RoomType,
+        r.BedType,
+        r.FloorNumber,
+        r.Amenities,
+        c.CheckinDateTime,
+        c.CheckoutDateTime,
+        -- StayDurationHours: for records without checkout, calculate up to CURRENT_TIMESTAMP()
+        ROUND(
+            DATEDIFF('second',
+                c.CheckinDateTime,
+                COALESCE(c.CheckoutDateTime, CURRENT_TIMESTAMP())
+            ) / 3600.0, 2
+        ) AS StayDurationHours,
+        -- StayDurationDays
+        ROUND(
+            DATEDIFF('second',
+                c.CheckinDateTime,
+                COALESCE(c.CheckoutDateTime, CURRENT_TIMESTAMP())
+            ) / 86400.0, 2
+        ) AS StayDurationDays,
+        c.BookingSource,
+        c.NumberOfGuests,
+        c.RoomRate,
+        c.ExtraCharges,
+        c.DiscountAmount,
+        c.TotalAmount,
+        c.PaymentMode,
+        c.Status,
+        c.LastUpdated
+    FROM STG_CHECKIN_CHECKOUT c
+    -- If GuestID has duplicates, take the first row
+    LEFT JOIN (
+        SELECT * FROM STG_GUEST_MASTER
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY GuestID ORDER BY GuestID) = 1
+    ) g ON g.GuestID = c.GuestID
+    -- If RoomID has duplicates, take the first row
+    LEFT JOIN (
+        SELECT * FROM STG_ROOM_MASTER
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY RoomID ORDER BY RoomID) = 1
+    ) r ON r.RoomID = c.RoomID
+    -- If StayID has duplicates, take only the first row
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY c.StayID ORDER BY c.StayID) = 1
+) AS src ON (tgt.StayID = src.StayID)
+
+WHEN MATCHED THEN UPDATE SET
+    tgt.GuestID           = src.GuestID,
+    tgt.GuestFullName     = COALESCE(src.GuestFullName, 'Unknown'),
+    tgt.Gender            = src.Gender,
+    tgt.Email             = src.Email,
+    tgt.City              = src.City,
+    tgt.Country           = src.Country,
+    tgt.RoomID            = src.RoomID,
+    tgt.RoomType          = COALESCE(src.RoomType, 'Unknown'),
+    tgt.BedType           = COALESCE(src.BedType, 'Unknown'),
+    tgt.FloorNumber       = src.FloorNumber,
+    tgt.Amenities         = COALESCE(src.Amenities, ''),
+    tgt.CheckinDateTime   = src.CheckinDateTime,
+    tgt.CheckoutDateTime  = src.CheckoutDateTime,
+    tgt.StayDurationHours = src.StayDurationHours,
+    tgt.StayDurationDays  = src.StayDurationDays,
+    tgt.BookingSource     = src.BookingSource,
+    tgt.NumberOfGuests    = src.NumberOfGuests,
+    tgt.RoomRate          = src.RoomRate,
+    tgt.ExtraCharges      = src.ExtraCharges,
+    tgt.DiscountAmount    = src.DiscountAmount,
+    tgt.TotalAmount       = src.TotalAmount,
+    tgt.PaymentMode       = src.PaymentMode,
+    tgt.Status            = src.Status,
+    tgt.LastUpdated       = src.LastUpdated,
+    tgt.ETL_LOAD_TIMESTAMP = CURRENT_TIMESTAMP()
+
+WHEN NOT MATCHED THEN INSERT (
+    StayID, GuestID, GuestFullName, Gender, Email, City, Country,
+    RoomID, RoomType, BedType, FloorNumber, Amenities,
+    CheckinDateTime, CheckoutDateTime, StayDurationHours, StayDurationDays,
+    BookingSource, NumberOfGuests, RoomRate, ExtraCharges,
+    DiscountAmount, TotalAmount, PaymentMode, Status, LastUpdated
+)
+VALUES (
+    src.StayID, src.GuestID, COALESCE(src.GuestFullName,'Unknown'),
+    src.Gender, src.Email, src.City, src.Country,
+    src.RoomID, COALESCE(src.RoomType,'Unknown'),
+    COALESCE(src.BedType,'Unknown'), src.FloorNumber,
+    COALESCE(src.Amenities,''),
+    src.CheckinDateTime, src.CheckoutDateTime,
+    src.StayDurationHours, src.StayDurationDays,
+    src.BookingSource, src.NumberOfGuests, src.RoomRate,
+    src.ExtraCharges, src.DiscountAmount, src.TotalAmount,
+    src.PaymentMode, src.Status, src.LastUpdated
+);
+
+-- Verify load
+SELECT COUNT(*) AS GUEST_STAY_ROWS FROM GUEST_STAY;
+
+
+-- ─────────────────────────────────────────────────────────────
+-- STEP 9: AUDIT LOG INSERT (INSERT records)
+-- ─────────────────────────────────────────────────────────────
+
+INSERT INTO GUEST_STAY_AUDIT (StayID, OperationType, NewStatus, NewTotalAmount)
+SELECT StayID, 'INSERT', Status, TotalAmount
+FROM GUEST_STAY
+WHERE StayID NOT IN (SELECT DISTINCT StayID FROM GUEST_STAY_AUDIT);
+
+SELECT COUNT(*) AS AUDIT_ROWS FROM GUEST_STAY_AUDIT;
+
+
+-- ─────────────────────────────────────────────────────────────
+-- STEP 10: STORED PROCEDURE
+-- ─────────────────────────────────────────────────────────────
+
+CREATE OR REPLACE PROCEDURE SP_DAILY_OCCUPANCY_REVENUE(RUN_DATE VARCHAR)
+RETURNS VARIANT
+LANGUAGE JAVASCRIPT
+AS
+$$
+    var result = {};
+
+    var r1 = snowflake.execute({ sqlText: "SELECT COUNT(*) FROM STG_ROOM_MASTER" });
+    r1.next();
+    result.TotalRoomsAvailable = r1.getColumnValue(1);
+
+    var occupiedSQL =
+        "SELECT COUNT(DISTINCT RoomID) FROM GUEST_STAY " +
+        "WHERE DATE(CheckinDateTime) <= '" + RUN_DATE + "' " +
+        "AND (CheckoutDateTime IS NULL OR DATE(CheckoutDateTime) >= '" + RUN_DATE + "') " +
+        "AND Status IN ('CheckedIn','CheckedOut')";
+    var r2 = snowflake.execute({ sqlText: occupiedSQL });
+    r2.next();
+    result.RoomsOccupied = r2.getColumnValue(1);
+
+    result.OccupancyRatePct = result.TotalRoomsAvailable > 0
+        ? Math.round((result.RoomsOccupied / result.TotalRoomsAvailable) * 10000) / 100
+        : 0;
+
+    var revenueSQL =
+        "SELECT COALESCE(SUM(TotalAmount),0), COUNT(*) FROM GUEST_STAY " +
+        "WHERE DATE(CheckinDateTime) <= '" + RUN_DATE + "' " +
+        "AND (CheckoutDateTime IS NULL OR DATE(CheckoutDateTime) >= '" + RUN_DATE + "') " +
+        "AND Status IN ('CheckedIn','CheckedOut')";
+    var r3 = snowflake.execute({ sqlText: revenueSQL });
+    r3.next();
+    result.TotalRevenue = r3.getColumnValue(1);
+    result.ActiveStays  = r3.getColumnValue(2);
+
+    var checkinSQL =
+        "SELECT COUNT(*) FROM GUEST_STAY " +
+        "WHERE DATE(CheckinDateTime) = '" + RUN_DATE + "'";
+    var r4 = snowflake.execute({ sqlText: checkinSQL });
+    r4.next();
+    result.CheckInsToday = r4.getColumnValue(1);
+
+    result.AvgRevenuePerRoom = result.RoomsOccupied > 0
+        ? Math.round((result.TotalRevenue / result.RoomsOccupied) * 100) / 100
+        : 0;
+
+    return result;
+$$;
+
+-- Stored Procedure test call
+CALL SP_DAILY_OCCUPANCY_REVENUE(TO_VARCHAR(CURRENT_DATE()));
+
+
+-- ─────────────────────────────────────────────────────────────
+-- STEP 11: ANALYTICAL USE CASES
+-- ─────────────────────────────────────────────────────────────
+
+-- USE CASE 1: Daily Occupancy & Revenue Summary
+SELECT
+    (SELECT COUNT(*) FROM STG_ROOM_MASTER)           AS TOTAL_ROOMS_AVAILABLE,
+    COUNT(DISTINCT gs.RoomID)                        AS ROOMS_OCCUPIED_TODAY,
+    ROUND(COUNT(DISTINCT gs.RoomID) * 100.0 /
+          NULLIF((SELECT COUNT(*) FROM STG_ROOM_MASTER), 0), 2)
+                                                     AS OCCUPANCY_RATE_PCT,
+    COALESCE(SUM(gs.TotalAmount), 0)                 AS TOTAL_REVENUE_GENERATED,
+    ROUND(COALESCE(SUM(gs.TotalAmount), 0) /
+          NULLIF(COUNT(DISTINCT gs.RoomID), 0), 2)   AS AVG_REVENUE_PER_OCCUPIED_ROOM
+FROM GUEST_STAY gs
+WHERE DATE(gs.CheckinDateTime) <= CURRENT_DATE()
+  AND (gs.CheckoutDateTime IS NULL
+       OR DATE(gs.CheckoutDateTime) >= CURRENT_DATE())
+  AND gs.Status IN ('CheckedIn', 'CheckedOut');
+
+
+-- USE CASE 2: Room-Type Wise Performance Analysis
+SELECT
+    RoomType,
+    COUNT(DISTINCT StayID)                     AS TOTAL_BOOKINGS,
+    COUNT(DISTINCT RoomID)                     AS ROOMS_USED,
+    ROUND(SUM(TotalAmount), 2)                 AS TOTAL_REVENUE,
+    ROUND(AVG(RoomRate), 2)                    AS ADR_AVG_DAILY_RATE,
+    ROUND(AVG(StayDurationDays), 2)            AS AVG_STAY_DAYS
+FROM GUEST_STAY
+GROUP BY RoomType
+ORDER BY TOTAL_REVENUE DESC;
+
+
+-- USE CASE 3: Guest Stay Duration Analysis
+SELECT
+    ROUND(AVG(StayDurationDays), 2)   AS AVG_LENGTH_OF_STAY_DAYS,
+    ROUND(MIN(StayDurationDays), 2)   AS MIN_STAY_DURATION_DAYS,
+    ROUND(MAX(StayDurationDays), 2)   AS MAX_STAY_DURATION_DAYS,
+    SUM(CEIL(StayDurationDays))       AS TOTAL_GUEST_NIGHTS,
+    COUNT(CASE WHEN StayDurationDays <= 1            THEN 1 END) AS SHORT_STAYS_1DAY,
+    COUNT(CASE WHEN StayDurationDays BETWEEN 2 AND 7 THEN 1 END) AS MID_STAYS_2_7DAYS,
+    COUNT(CASE WHEN StayDurationDays > 7             THEN 1 END) AS LONG_STAYS_OVER_7DAYS
+FROM GUEST_STAY
+WHERE StayDurationDays IS NOT NULL AND StayDurationDays > 0;
+
+
+-- USE CASE 4: High-Value Guest Identification (Top 10)
+SELECT
+    GuestID,
+    GuestFullName,
+    Country,
+    SUM(TotalAmount)                AS TOTAL_REVENUE_PER_GUEST,
+    COUNT(StayID)                   AS NUMBER_OF_VISITS,
+    ROUND(AVG(TotalAmount), 2)      AS AVG_SPEND_PER_STAY,
+    ROUND(AVG(StayDurationDays), 2) AS AVG_STAY_DAYS
+FROM GUEST_STAY
+GROUP BY GuestID, GuestFullName, Country
+ORDER BY TOTAL_REVENUE_PER_GUEST DESC
+LIMIT 10;
+
+
+-- USE CASE 5: Booking Source Distribution
+SELECT
+    BookingSource,
+    COUNT(*)                                         AS TOTAL_BOOKINGS,
+    ROUND(SUM(TotalAmount), 2)                       AS TOTAL_REVENUE,
+    ROUND(COUNT(*) * 100.0 /
+          NULLIF(SUM(COUNT(*)) OVER(), 0), 2)        AS BOOKING_PCT
+FROM GUEST_STAY
+GROUP BY BookingSource
+ORDER BY TOTAL_BOOKINGS DESC;
+
+
+-- USE CASE 6: Payment Mode Analysis
+SELECT
+    PaymentMode,
+    COUNT(*)                        AS TOTAL_TRANSACTIONS,
+    ROUND(SUM(TotalAmount), 2)      AS TOTAL_AMOUNT_COLLECTED,
+    ROUND(AVG(TotalAmount), 2)      AS AVG_TRANSACTION_VALUE
+FROM GUEST_STAY
+GROUP BY PaymentMode
+ORDER BY TOTAL_AMOUNT_COLLECTED DESC;
